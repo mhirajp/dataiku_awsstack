@@ -1,0 +1,378 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Template for preparing VPC and roles before creating Dataiku FleetManager
+
+Parameters:
+  DeploymentSuffix:
+    Type: String
+    AllowedPattern: "[-a-zA-Z0-9]+"
+    Default: dev
+    ConstraintDescription: Only alphanumeric characters and hyphens are allowed
+    Description: Unique identifier (e.g., dev, prod-001)
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the entire VPC (e.g., 10.0.0.0/16)
+
+  Subnet1Cidr:
+    Type: String
+    Default: 10.0.0.0/20
+    Description: CIDR block for Subnet 1 (e.g., 10.0.0.0/20)
+
+  Subnet2Cidr:
+    Type: String
+    Default: 10.0.16.0/20
+    Description: CIDR block for Subnet 2 (e.g., 10.0.16.0/20)
+
+  NatSubnetCidr:
+    Type: String
+    Default: 10.0.240.0/28
+    Description: CIDR block for NAT Gateway public subnet (e.g., 10.0.240.0/20)
+
+Resources:
+  DataikuVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-vpc-${DeploymentSuffix}"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-igw-${DeploymentSuffix}"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DataikuVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NatSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DataikuVPC
+      CidrBlock: !Ref NatSubnetCidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-natsubnet-${DeploymentSuffix}"
+
+  EIPForNAT:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIPForNAT.AllocationId
+      SubnetId: !Ref NatSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-natgw-${DeploymentSuffix}"
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DataikuVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-publicroutetable-${DeploymentSuffix}"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref NatSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DataikuVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-private-rt-${DeploymentSuffix}"
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  Subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DataikuVPC
+      CidrBlock: !Ref Subnet1Cidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-subnet1-${DeploymentSuffix}"
+
+  Subnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DataikuVPC
+      CidrBlock: !Ref Subnet2Cidr
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-subnet2-${DeploymentSuffix}"
+
+  Subnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  Subnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  DSSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "dataiku-dss_role_name-${DeploymentSuffix}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+      Policies:
+        - PolicyName: DSSInlinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:TagResource
+                  - ecr:GetAuthorizationToken
+                  - ecr:DescribeRepositories
+                  - ecr:UploadLayerPart
+                  - ecr:InitiateLayerUpload
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - kms:CreateGrant
+                  - kms:DescribeKey
+                  - eks:*
+                  - secretsmanager:*
+                Resource: "*"
+
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/aws/*"
+                  - "arn:aws:ssm::*:parameter/aws/*"
+
+              - Effect: Allow
+                Action:
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:ListInstanceProfiles
+                  - iam:AddRoleToInstanceProfile
+                  - iam:ListInstanceProfilesForRole
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:GetRole
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:AttachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:PassRole
+                  - iam:DetachRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:GetOpenIDConnectProvider
+                  - iam:CreateOpenIDConnectProvider
+                  - iam:DeleteOpenIDConnectProvider
+                  - iam:ListAttachedRolePolicies
+                  - iam:TagRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/eksctl-*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/eksctl-*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/eks-nodegroup.amazonaws.com/AWSServiceRoleForAmazonEKSNodeGroup"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/eksctl-managed-*"
+
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
+
+              - Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - eks.amazonaws.com
+                      - eks-nodegroup.amazonaws.com
+                      - eks-fargate.amazonaws.com
+
+              - Sid: EKSAutoScalingWrite
+                Effect: Allow
+                Action:
+                  - autoscaling:UpdateAutoScalingGroup
+                  - autoscaling:DeleteAutoScalingGroup
+                  - autoscaling:CreateAutoScalingGroup
+                Resource:
+                  - "arn:aws:autoscaling:*:*:autoScalingGroup:*:autoScalingGroupName/*"
+
+              - Sid: EKSAutoScalingRead
+                Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeScalingActivities
+                  - autoscaling:DescribeLaunchConfigurations
+                Resource: "*"
+  DSSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "dataiku_dss_instance_profile-${DeploymentSuffix}"
+      Roles:
+        - !Ref DSSRole
+
+  FMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "dataiku-fm_role-${DeploymentSuffix}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FMInlinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DeleteVolume
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                  - ec2:AttachVolume
+                  - ec2:ModifyVolume
+                  - ec2:DeleteSnapshot
+                  - ec2:RebootInstances
+                  - ec2:TerminateInstances
+                  - ec2:AssociateIamInstanceProfile
+                  - ec2:DisassociateIamInstanceProfile
+                  - ec2:CreateTags
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:CreateVolume
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeInstances
+                  - ec2:DescribeIamInstanceProfileAssociations
+                  - ec2:DescribeSecurityGroups
+                  - ec2:CreateSecurityGroup
+                  - ec2:RunInstances
+                  - ec2:CreateSnapshot
+                  - ec2:AssociateAddress
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                  - ec2:DescribeRouteTables
+                  - ec2:AcceptVpcPeeringConnection
+                  - ec2:DeleteVpcPeeringConnection
+                  - ec2:CreateVpcPeeringConnection
+                  - ec2:DescribeVpcPeeringConnections
+                  - sts:GetCallerIdentity
+                  - sts:AssumeRole
+                  - route53:ChangeResourceRecordSets
+                  - route53:ListResourceRecordSets
+                  - route53:GetChange
+                  - acm:DescribeCertificate
+                  - acm:ExportCertificate
+                  - acm:ListCertificates
+                  - acm:RenewCertificate
+                  - acm:DeleteCertificate
+                  - acm:UpdateCertificateOptions
+                  - elasticloadbalancing:*
+                Resource: "*"
+
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt DSSRole.Arn
+
+Outputs:
+  Subnet1Az:
+    Description: Availability Zone for Subnet 1
+    Value: !Select [0, !GetAZs ""]
+
+  Subnet2Az:
+    Description: Availability Zone for Subnet 2
+    Value: !Select [1, !GetAZs ""]
+
+  VpcId:
+    Description: ID of the created VPC
+    Value: !Ref DataikuVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-vpc-id-${DeploymentSuffix}"
+
+  Subnet1Id:
+    Description: ID of Subnet 1
+    Value: !Ref Subnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet1-id-${DeploymentSuffix}"
+
+  Subnet2Id:
+    Description: ID of Subnet 2
+    Value: !Ref Subnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet2-id-${DeploymentSuffix}"
+
+  DSSRoleArn:
+    Description: ARN of the IAM role
+    Value: !GetAtt DSSRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DSSRoleArn-${DeploymentSuffix}"
+
+  DSSInstanceProfileArn:
+    Description: ARN of the instance profile
+    Value: !GetAtt DSSInstanceProfile.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DSSInstanceProfileArn-${DeploymentSuffix}"
+
+  FMRoleArn:
+    Description: ARN of the created FM IAM role
+    Value: !GetAtt FMRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FMRoleArn-${DeploymentSuffix}"

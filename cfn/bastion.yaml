@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Launch a Windows EC2 instance in an existing VPC and Subnet, accessible via AWS Systems Manager Session Manager.
+
+Parameters:
+  DeploymentSuffix:
+    Type: String
+    Default: dev
+    Description: Environment suffix (e.g., dev, prod)
+
+Resources:
+  EC2SSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ec2-ssm-role-${DeploymentSuffix}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2SSMRole
+
+  SsmSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow outbound traffic for SSM (no inbound rule needed)
+      VpcId: !ImportValue
+        Fn::Sub: dataiku-base-vpc-id-${DeploymentSuffix}
+      SecurityGroupIngress: []
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  WindowsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.medium
+      ImageId: "{{resolve:ssm:/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base}}"
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeviceIndex: 0
+          SubnetId: !ImportValue
+            Fn::Sub: dataiku-base-subnet1-id-${DeploymentSuffix}
+          GroupSet:
+            - !Ref SsmSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub dataiku-bastion-${DeploymentSuffix}
+
+Outputs:
+  InstanceId:
+    Description: Windows EC2 instance ID
+    Value: !Ref WindowsInstance
+
+  IAMRole:
+    Description: IAM role attached to the instance
+    Value: !Ref EC2SSMRole
+
+  InstanceProfile:
+    Description: IAM instance profile used by EC2
+    Value: !Ref EC2InstanceProfile
