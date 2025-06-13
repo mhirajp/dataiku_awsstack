@@ -191,3 +191,6 @@ aws ssm start-session --region ap-northeast-1 --target i-xxxx --document-name AW
 [Start your first DSS](https://doc.dataiku.com/dss/latest/installation/cloudstacks-aws/guided-setup-new-vpc-elastic-compute.html#start-your-first-dss)の手順に従ってDSSを作成。
 
 作成したDSSへの接続も、踏み台VMのWebブラウザからで、プライベートIPアドレスを指定して接続する。
+
+
+
