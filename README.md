@@ -173,6 +173,14 @@ AWS CLIのダウンロード、設定手順は省略。
 2. `SessionManagerPluginSetup.exe`を実行
 3. コマンドプロンプトで、`session-manager-plugin`を実行
 
+#### Windowsパスワード取得
+
+踏み台VMのパスワードをコンソールで取得する。
+
+AMCのEC2のインスタンスの画面を開き、踏み台VMを選択。アクションからパスワードを取得を選択。
+キーペアのファイルの値を入力し、パスワードを取得する。
+
+
 ### 踏み台サーバへの接続
 
 targetを接続先インスタンスIDに書き換えて、下記を実行してください。
@@ -181,7 +189,25 @@ targetを接続先インスタンスIDに書き換えて、下記を実行して
 aws ssm start-session --region ap-northeast-1 --target i-xxxx --document-name AWS-StartPortForwardingSession --parameters "portNumber=3389, localPortNumber=13389"
 ```
 
-リモートデスクトップを開き、`localhost:13389`へ接続。
+リモートデスクトップを開き、`localhost:13389`へ接続し、下記の情報でサインインする。
+
+- ID:administrator
+- PW:取得したパスワード
+
+## ポート転送による接続
+
+踏み台を経由する代わりにFleet ManagerやDSSのポートを転送して、クライアントPCのブラウザで開いてもよい。
+ただし、各インスタンスに、AmazonSSMManagedInstanceCore権限を付与し、ポートごとにコマンドを実行する必要がある。
+
+基本的にレスポンスはこちらのほうが早いので、お好みで。
+
+```sh
+aws ssm start-session --region ap-northeast-1 --target i-xxxx(Fleet Manager等のインスタンスID) --document-name AWS-StartPortForwardingSession --parameters "portNumber=443, localPortNumber=10443"
+```
+
+Webブラウザを開き、`https://localhost:10443`へ接続する。
+DSSへの接続も転送する場合はパラメータを`portNumber=443, localPortNumber=12443`のようにlocalPortNumberが被らないように設定すること。
+
 
 ## DSS作成
 

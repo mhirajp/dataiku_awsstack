@@ -7,6 +7,10 @@ Parameters:
     Default: dev
     Description: Environment suffix (e.g., dev, prod)
 
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Key pair name
+
 Resources:
   EC2SSMRole:
     Type: AWS::IAM::Role
@@ -44,6 +48,7 @@ Resources:
     Properties:
       InstanceType: t3.medium
       ImageId: "{{resolve:ssm:/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base}}"
+      KeyName: !Ref KeyPairName
       NetworkInterfaces:
         - AssociatePublicIpAddress: false
           DeviceIndex: 0
