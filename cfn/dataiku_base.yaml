@@ -27,7 +27,7 @@ Parameters:
   NatSubnetCidr:
     Type: String
     Default: 10.0.240.0/28
-    Description: CIDR block for NAT Gateway public subnet (e.g., 10.0.240.0/20)
+    Description: CIDR block for NAT Gateway public subnet (e.g., 10.0.240.0/28)
 
 Resources:
   DataikuVPC:
@@ -39,6 +39,51 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "dataiku-vpc-${DeploymentSuffix}"
+
+  DataikuFlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/aws/vpc/flow-logs/dataiku-${DeploymentSuffix}"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "dataiku-vpc-${DeploymentSuffix}"
+
+  FlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "dataiku-flowlog-role-${DeploymentSuffix}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FlowLogInlinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: "*"
+
+  DataikuFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref DataikuVPC
+      ResourceType: VPC
+      TrafficType: ALL
+      LogGroupName: !Ref DataikuFlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
